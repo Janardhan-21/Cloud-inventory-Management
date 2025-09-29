@@ -33,15 +33,15 @@
         const awsConfig = {
             Auth: {
                 // Cognito User Pool Details
-                CognitoUserPoolId: 'YOUR_COGNITO_USER_POOL_ID', // e.g., us-east-1_XXXXXX
-                CognitoUserPoolWebClientId: 'YOUR_COGNITO_APP_CLIENT_ID', // e.g., 7d0a2d2s0s0s0s0s
-                region: 'YOUR_AWS_REGION', // e.g., us-east-1
+                CognitoUserPoolId: 'us-east-1_LclT08VCn', // e.g., us-east-1_XXXXXX
+                CognitoUserPoolWebClientId: '1c4ps6ht4po9a5s1bi7kg4v50l', // e.g., 7d0a2d2s0s0s0s0s
+                region: 'us-east-1', // e.g., us-east-1
             },
             API: {
                 endpoints: [
                     {
                         name: "RetailInventoryAPI", // Name used in API calls
-                        endpoint: 'https://YOUR_API_GATEWAY_ID.execute-api.YOUR_AWS_REGION.amazonaws.com/prod',
+                        endpoint: 'https://dia3jtgsq6.execute-api.us-east-1.amazonaws.com/prod',
                         // Secure all calls using the user's Cognito token
                         custom_header: async () => {
                             try {
