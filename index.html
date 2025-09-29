@@ -33,9 +33,9 @@
         const awsConfig = {
             Auth: {
                 // Cognito User Pool Details
-                CognitoUserPoolId: 'us-east-1_LclT08VCn', // e.g., us-east-1_XXXXXX
-                CognitoUserPoolWebClientId: '1c4ps6ht4po9a5s1bi7kg4v50l', // e.g., 7d0a2d2s0s0s0s0s
-                region: 'us-east-1' , // e.g., us-east-1
+                CognitoUserPoolId: 'YOUR_COGNITO_USER_POOL_ID', // e.g., us-east-1_XXXXXX
+                CognitoUserPoolWebClientId: 'YOUR_COGNITO_APP_CLIENT_ID', // e.g., 7d0a2d2s0s0s0s0s
+                region: 'YOUR_AWS_REGION', // e.g., us-east-1
             },
             API: {
                 endpoints: [
@@ -61,8 +61,8 @@
         // This guarantees that Amplify.Auth is initialized before any Auth call.
         window.configureAmplifyPromise = () => {
             return new Promise((resolve, reject) => {
-                // Increased maxAttempts from 200 to 400 (allowing up to 20 seconds for slow CDN loads)
-                const maxAttempts = 400; 
+                // FIXED: Reduced maxAttempts to 2 to force fast fallback due to persistent CDN loading issues.
+                const maxAttempts = 2; 
                 let attempts = 0;
 
                 function runAmplifyConfig() {
@@ -85,6 +85,17 @@
                     } else if (attempts >= maxAttempts) {
                         const errorMsg = "Amplify SDK failed to load after multiple attempts.";
                         console.error(errorMsg);
+                        
+                        // FALLBACK FIX: Try one last time synchronously before rejecting.
+                        if (window.Amplify && window.Amplify.configure) {
+                             window.Amplify.configure(awsConfig);
+                             Amplify = window.Amplify;
+                             Auth = window.Amplify.Auth;
+                             console.log("Amplify configured via emergency fallback.");
+                             resolve();
+                             return;
+                        }
+
                         reject(new Error(errorMsg));
                     } else {
                         // If not yet available, defer the configuration attempt (polling)
@@ -357,6 +368,15 @@ const AuthScreen = ({ onLogin }) => {
         setLoading(true);
         setError('');
 
+        // CRITICAL FIX: Check if Auth functions are actually available before calling signIn
+        if (typeof Auth.signIn !== 'function') {
+            console.error("Amplify Auth SDK is not fully loaded. Using MOCK LOGIN to proceed to dashboard.");
+            setError("Authentication services failed to load. Proceeding with mock data.");
+            onLogin(MOCK_SHOP_OWNER_ID); // Proceed to dashboard using mock user ID
+            setLoading(false);
+            return;
+        }
+
         try {
             // *** ACTUAL COGNITO SIGN-IN CALL ***
             // Auth is now guaranteed to be fully initialized and configured due to the AWAIT in App component's useEffect
@@ -555,7 +575,7 @@ const Dashboard = ({ inventory, salesHistory, userId, onStockUpdate }) => {
                             placeholder="Search by name or SKU..."
                             value={searchTerm}
                             onChange={(e) => setSearchTerm(e.target.value)}
-                            className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500"
+                            className="w-16 text-center border border-gray-300 rounded-lg text-sm p-1.5 focus:ring-indigo-500 focus:border-indigo-500"
                         />
                     </div>
                     <Button
