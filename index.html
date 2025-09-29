@@ -1,0 +1,779 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Retail Inventory Dashboard</title>
+    <!-- Load Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        // Tailwind configuration for Inter font and default styling
+        tailwind.config = {
+            theme: {
+                extend: {
+                    fontFamily: {
+                        sans: ['Inter', 'sans-serif'],
+                    },
+                }
+            }
+        }
+    </script>
+    <!-- Load React, ReactDOM, and Babel for JSX compilation -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+    <!-- 1. ADDING AWS AMPLIFY LIBRARIES -->
+    <script src="https://unpkg.com/aws-amplify@6.0.21/dist/aws-amplify.min.js"></script>
+    <script>
+        // Define global variables used by React components. These will be updated when Amplify is ready.
+        var Amplify = window.Amplify;
+        var Auth = Amplify ? Amplify.Auth : {};
+
+        // 2. AWS CONFIGURATION BLOCK: *** YOU MUST UPDATE THESE PLACEHOLDERS ***
+        const awsConfig = {
+            Auth: {
+                // Cognito User Pool Details
+                CognitoUserPoolId: 'us-east-1_LclT08VCn', // e.g., us-east-1_XXXXXX
+                CognitoUserPoolWebClientId: '1c4ps6ht4po9a5s1bi7kg4v50l', // e.g., 7d0a2d2s0s0s0s0s
+                region: 'us-east-1' , // e.g., us-east-1
+            },
+            API: {
+                endpoints: [
+                    {
+                        name: "RetailInventoryAPI", // Name used in API calls
+                        endpoint: 'https://YOUR_API_GATEWAY_ID.execute-api.YOUR_AWS_REGION.amazonaws.com/prod',
+                        // Secure all calls using the user's Cognito token
+                        custom_header: async () => {
+                            try {
+                                // Use the global Auth variable directly
+                                const session = await Auth.currentSession();
+                                return { Authorization: session.getIdToken().getJwtToken() }
+                            } catch (e) {
+                                return {};
+                            }
+                        }
+                    }
+                ]
+            }
+        };
+        
+        // CRITICAL FIX: Wrap the polling logic in a promise for React to await.
+        // This guarantees that Amplify.Auth is initialized before any Auth call.
+        window.configureAmplifyPromise = () => {
+            return new Promise((resolve, reject) => {
+                // Increased maxAttempts from 200 to 400 (allowing up to 20 seconds for slow CDN loads)
+                const maxAttempts = 400; 
+                let attempts = 0;
+
+                function runAmplifyConfig() {
+                    attempts++;
+                    const localAmplify = window.Amplify;
+                    
+                    if (localAmplify && localAmplify.configure) {
+                        try {
+                            localAmplify.configure(awsConfig);
+                            console.log("Amplify configured successfully.");
+                            
+                            // Update the global var references used by React
+                            Amplify = localAmplify;
+                            Auth = localAmplify.Auth;
+                            resolve(); // Resolve the promise once configured
+                        } catch (e) {
+                            console.error("Amplify configuration failed:", e);
+                            reject(e);
+                        }
+                    } else if (attempts >= maxAttempts) {
+                        const errorMsg = "Amplify SDK failed to load after multiple attempts.";
+                        console.error(errorMsg);
+                        reject(new Error(errorMsg));
+                    } else {
+                        // If not yet available, defer the configuration attempt (polling)
+                        setTimeout(runAmplifyConfig, 50); 
+                    }
+                }
+                
+                runAmplifyConfig();
+            });
+        };
+        // NOTE: We no longer call runAmplifyConfig() immediately here. 
+        // React's useEffect will call and await configureAmplifyPromise.
+
+    </script>
+</head>
+<body>
+    <div id="root"></div>
+
+    <!-- The entire application logic, wrapped in a script block for Babel compilation -->
+    <script type="text/babel">
+        // Destructure React hooks from the global React object
+        const { useState, useEffect, useMemo, useCallback } = React;
+        // CRITICAL FIX: Explicitly define ReactDOM from the global window object for use in the App mount section
+        const ReactDOM = window.ReactDOM;
+
+        // --- Mock Icon Components (Lucide replacements for single-file HTML environment) ---
+        const Package = ({ className }) => <svg className={className} xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m7.5 4.27 9 5.15"/><path d="m2.84 9.1 9-5.15 9 5.15-9 5.15z"/><path d="M7.5 19.82 12 22.5l4.5-2.68"/><path d="M12 14.28 2.84 9.1"/><path d="M21.16 9.1-7.5 4.27"/></svg>;
+        const AlertTriangle = ({ className }) => <svg className={className} xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>;
+        const Search = ({ className }) => <svg className={className} xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>;
+        const Plus = ({ className }) => <svg className={className} xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>;
+        const Minus = ({ className }) => <svg className={className} xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="5" y1="12" x2="19" y2="12"/></svg>;
+        const LogIn = ({ className }) => <svg className={className} xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><polyline points="10 17 15 12 10 7"/><line x1="15" y1="12" x2="3" y2="12"/></svg>;
+        const Users = ({ className }) => <svg className={className} xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>;
+        const TrendingUp = ({ className }) => <svg className={className} xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="22 7 13.5 15.5 8.5 10.5 2 17"/><polyline points="16 7 22 7 22 13"/></svg>;
+        const CheckCircle = ({ className }) => <svg className={className} xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>;
+        const XCircle = ({ className }) => <svg className={className} xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>;
+        const Loader2 = ({ className }) => <svg className={className} xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg>;
+        const BarChart3 = ({ className }) => <svg className={className} xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="3" y1="3" x2="3" y2="21"/><line x1="18" y1="21" x2="18" y2="11"/><line x1="12" y1="21" x2="12" y2="15"/><line x1="6" y1="21" x2="6" y2="17"/></svg>;
+
+
+// --- Configuration and Mock Data ---
+
+// MOCK_SHOP_OWNER_ID is used only as a temporary userId before real authentication is done.
+const MOCK_SHOP_OWNER_ID = "us-east-1:a1b2c3d4-e5f6-7890-g1h2-i3j4k5l6m7n8";
+
+const initialInventory = [
+    { id: '1001', name: 'Organic Coffee Beans (Brazil)', sku: 'CFB001', stock: 45, threshold: 20, price: 12.99, lastSale: '2024-09-27' },
+    { id: '1002', name: 'Artisan Sourdough Loaf', sku: 'SDL002', stock: 8, threshold: 10, price: 5.50, lastSale: '2024-09-28' },
+    { id: '1003', name: 'Local Honey Jar (Small)', sku: 'HNY003', stock: 150, threshold: 50, price: 9.99, lastSale: '2024-09-25' },
+    { id: '1004', name: 'Matcha Powder (Ceremonial)', sku: 'MTCA04', stock: 12, threshold: 15, price: 25.00, lastSale: '2024-09-28' },
+    { id: '1005', name: 'Oat Milk Carton (Case)', sku: 'OMCK05', stock: 2, threshold: 5, price: 30.00, lastSale: '2024-09-26' },
+];
+
+const mockSalesHistory = [
+    { date: '2024-09-28', total: 150.75, items: 12 },
+    { date: '2024-09-27', total: 345.20, items: 28 },
+    { date: '2024-09-26', total: 210.00, items: 19 },
+    { date: '2024-09-25', total: 401.50, items: 35 },
+    { date: '2024-09-24', total: 299.99, items: 22 },
+];
+
+// --- Utility Components ---
+
+const Button = ({ children, onClick, variant = 'primary', className = '', disabled = false, icon: Icon }) => {
+    const baseClasses = "flex items-center justify-center space-x-2 px-4 py-2 text-sm font-medium rounded-lg transition duration-150 shadow-md";
+    let colorClasses = "";
+
+    switch (variant) {
+        case 'primary':
+            colorClasses = "bg-indigo-600 text-white hover:bg-indigo-700 active:bg-indigo-800 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2";
+            break;
+        case 'secondary':
+            colorClasses = "bg-white text-gray-700 border border-gray-300 hover:bg-gray-50 active:bg-gray-100 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2";
+            break;
+        case 'danger':
+            colorClasses = "bg-red-600 text-white hover:bg-red-700 active:bg-red-800 focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-offset-2";
+            break;
+        case 'info':
+            colorClasses = "bg-blue-500 text-white hover:bg-blue-600 active:bg-blue-700";
+            break;
+        default:
+            colorClasses = "bg-indigo-600 text-white hover:bg-indigo-700";
+    }
+
+    const disabledClasses = disabled ? "opacity-50 cursor-not-allowed" : "";
+
+    return (
+        <button
+            onClick={onClick}
+            className={`${baseClasses} ${colorClasses} ${className} ${disabledClasses}`}
+            disabled={disabled}
+        >
+            {Icon && <Icon className="w-4 h-4" />}
+            <span>{children}</span>
+        </button>
+    );
+};
+
+const StatCard = ({ title, value, icon: Icon, colorClass, description }) => (
+    <div className="bg-white p-6 rounded-xl shadow-lg border border-gray-100 transition duration-300 hover:shadow-xl">
+        <div className="flex items-center space-x-4">
+            <div className={`p-3 rounded-full ${colorClass} bg-opacity-10`}>
+                <Icon className={`w-6 h-6 ${colorClass}`} />
+            </div>
+            <div>
+                <p className="text-sm font-medium text-gray-500">{title}</p>
+                <p className="text-3xl font-bold text-gray-900">{value}</p>
+            </div>
+        </div>
+        <p className="mt-2 text-xs text-gray-500 italic">{description}</p>
+    </div>
+);
+
+const LowStockAlert = ({ alerts, onSnooze }) => (
+    <div className="bg-orange-50 border-l-4 border-orange-500 p-4 rounded-lg shadow-md mb-6">
+        <div className="flex items-center justify-between">
+            <div className="flex items-center">
+                <AlertTriangle className="w-5 h-5 text-orange-500 mr-3" />
+                <h3 className="text-lg font-semibold text-orange-800">Low Stock Alerts ({alerts.length})</h3>
+            </div>
+            <p className="text-sm text-orange-600 hidden sm:block">Action required to avoid stockouts.</p>
+        </div>
+        <ul className="mt-3 space-y-2">
+            {alerts.slice(0, 3).map((item) => (
+                <li key={item.id} className="flex justify-between items-center text-sm text-orange-700 p-2 bg-orange-100 rounded-md">
+                    <span className="font-medium truncate">{item.name}</span>
+                    <span className="text-xs ml-2">Stock: {item.stock} / Threshold: {item.threshold}</span>
+                    <Button
+                        variant="secondary"
+                        className="ml-4 py-1 px-3 text-xs"
+                        onClick={() => onSnooze(item.id)}
+                    >
+                        Order Now
+                    </Button>
+                </li>
+            ))}
+            {alerts.length > 3 && (
+                <li className="text-sm text-center text-orange-700 pt-1">
+                    ... and {alerts.length - 3} more items below threshold.
+                </li>
+            )}
+        </ul>
+    </div>
+);
+
+const NotificationDemo = ({ item }) => {
+    const [status, setStatus] = useState('pending'); // pending, sending, sent, error
+
+    const triggerSNSMock = async () => {
+        setStatus('sending');
+        // This is where a real API call would go, targeting a Lambda connected to SNS
+        console.log(`[API CALL SIMULATED]: Sending alert for ${item.name} to SNS via Lambda/API Gateway...`);
+
+        try {
+            // Replace this with a call to Amplify.API
+            /*
+            const response = await Amplify.API.post('RetailInventoryAPI', '/alerts', {
+                body: { itemId: item.id, stockLevel: item.stock, message: 'Low Stock Alert' }
+            });
+            */
+
+            // Simulate network delay
+            await new Promise(resolve => setTimeout(resolve, 2000));
+
+            if (Math.random() > 0.1) { // 90% success rate
+                setStatus('sent');
+                console.log(`[MOCK SNS SUCCESS]: SNS Notification request sent successfully!`);
+            } else {
+                setStatus('error');
+                console.log(`[MOCK SNS ERROR]: Failed to send SNS Notification request.`);
+            }
+        } catch (error) {
+            console.error("API Error:", error);
+            setStatus('error');
+        }
+    };
+
+    let color = 'text-gray-500';
+    let label = 'Trigger SNS Demo';
+    let Icon = AlertTriangle;
+
+    if (status === 'sending') {
+        color = 'text-blue-500';
+        label = 'Sending...';
+        Icon = Loader2;
+    } else if (status === 'sent') {
+        color = 'text-green-600';
+        label = 'Alert Sent!';
+        Icon = CheckCircle;
+    } else if (status === 'error') {
+        color = 'text-red-500';
+        label = 'Error Sending';
+        Icon = XCircle;
+    }
+
+    return (
+        <div className="flex flex-col items-center p-4 bg-white rounded-xl shadow-md border border-gray-200">
+            <h4 className="text-lg font-semibold text-gray-700 mb-2">SNS Alert Demo</h4>
+            <p className="text-center text-sm mb-4 text-gray-600">
+                Item **{item.name}** is below its threshold of **{item.threshold}** (Current Stock: **{item.stock}**).
+            </p>
+            <Button
+                variant={status === 'sent' ? 'secondary' : 'info'}
+                onClick={triggerSNSMock}
+                disabled={status === 'sending' || status === 'sent'}
+                icon={status === 'sending' ? Loader2 : Icon}
+                className={`w-full ${color}`}
+            >
+                {label}
+            </Button>
+            <p className="text-xs mt-2 text-gray-500">
+                This simulates the API call that triggers the Amazon SNS notification via Lambda.
+            </p>
+        </div>
+    );
+};
+
+// --- API Service Layer (Now uses Amplify API for real calls, but keeps the mock structure) ---
+
+const inventoryService = (userId) => {
+    // In a real app, 'userId' is used for scoping data access (ShopId)
+
+    const fetchAll = async () => {
+        console.log(`[API Call]: Fetching inventory for user ${userId} via Amplify API...`);
+        try {
+            // *** ACTUAL AMPLIFY API CALL EXAMPLE (Uncomment to enable real calls) ***
+            // const data = await Amplify.API.get('RetailInventoryAPI', '/inventory');
+            // return data;
+
+            // MOCK FALLBACK:
+            return new Promise(resolve => setTimeout(() => resolve(initialInventory), 500));
+        } catch (error) {
+            console.error("Amplify API GET /inventory failed:", error);
+            throw error;
+        }
+    };
+
+    const updateStock = async (itemId, change) => {
+        console.log(`[API Call]: Updating stock for item ${itemId} by ${change} via Amplify API...`);
+        try {
+            // *** ACTUAL AMPLIFY API CALL EXAMPLE (Uncomment to enable real calls) ***
+            /*
+            const response = await Amplify.API.put('RetailInventoryAPI', `/inventory/${itemId}/stock`, {
+                body: { change: change }
+            });
+            return response;
+            */
+
+            // MOCK FALLBACK:
+            return new Promise(resolve => setTimeout(resolve, 300));
+        } catch (error) {
+            console.error("Amplify API PUT /inventory failed:", error);
+            throw error;
+        }
+    };
+
+    return { fetchAll, updateStock };
+};
+
+// --- Main Components ---
+
+const AuthScreen = ({ onLogin }) => {
+    const [email, setEmail] = useState('owner@shop.com');
+    const [password, setPassword] = useState('password');
+    const [loading, setLoading] = useState(false);
+    const [error, setError] = useState('');
+
+    const handleLogin = async (e) => {
+        e.preventDefault();
+        setLoading(true);
+        setError('');
+
+        try {
+            // *** ACTUAL COGNITO SIGN-IN CALL ***
+            // Auth is now guaranteed to be fully initialized and configured due to the AWAIT in App component's useEffect
+            
+            const user = await Auth.signIn(email, password);
+            
+            // Once signed in, we get the unique ID (Cognito Identity ID)
+            const userId = user.attributes.sub;
+            console.log("Successfully logged in with Cognito user ID:", userId);
+            onLogin(userId);
+        } catch (err) {
+            console.error("Cognito Login Error:", err);
+            let errorMessage = 'An unknown error occurred during login.';
+            if (err && err.message) {
+                errorMessage = `Login failed: ${err.message}`;
+            } else if (err && err.code) {
+                 errorMessage = `Login failed: ${err.code}`;
+            }
+            setError(errorMessage);
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    return (
+        <div className="min-h-screen flex items-center justify-center bg-gray-50 p-4">
+            <div className="max-w-md w-full bg-white p-8 rounded-2xl shadow-2xl border border-indigo-100">
+                <div className="flex justify-center mb-6">
+                    <Package className="w-10 h-10 text-indigo-600" />
+                </div>
+                <h2 className="text-2xl font-extrabold text-center text-gray-900">
+                    Retail Inventory System Login
+                </h2>
+                <p className="mt-2 text-center text-sm text-gray-600">
+                    Sign in with your Cognito credentials.
+                </p>
+                <form className="mt-8 space-y-6" onSubmit={handleLogin}>
+                    <input type="hidden" name="remember" value="true" />
+                    <div className="rounded-md shadow-sm -space-y-px">
+                        <div>
+                            <label htmlFor="email-address" className="sr-only">Email address</label>
+                            <input
+                                id="email-address"
+                                name="email"
+                                type="email"
+                                required
+                                className="appearance-none rounded-none relative block w-full px-3 py-2 border border-gray-300 placeholder-gray-500 text-gray-900 rounded-t-lg focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
+                                placeholder="Email address"
+                                value={email}
+                                onChange={(e) => setEmail(e.target.value)}
+                            />
+                        </div>
+                        <div>
+                            <label htmlFor="password" className="sr-only">Password</label>
+                            <input
+                                id="password"
+                                name="password"
+                                type="password"
+                                required
+                                className="appearance-none rounded-none relative block w-full px-3 py-2 border border-gray-300 placeholder-gray-500 text-gray-900 rounded-b-lg focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
+                                placeholder="Password"
+                                value={password}
+                                onChange={(e) => setPassword(e.target.value)}
+                            />
+                        </div>
+                    </div>
+
+                    {error && (
+                        <div className="text-red-600 text-sm p-2 bg-red-50 rounded-lg border border-red-200">
+                            {error}
+                        </div>
+                    )}
+
+                    <div>
+                        <Button
+                            type="submit"
+                            className="w-full"
+                            disabled={loading}
+                            icon={loading ? Loader2 : LogIn}
+                        >
+                            {loading ? 'Signing In...' : 'Sign In'}
+                        </Button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    );
+};
+
+const Dashboard = ({ inventory, salesHistory, userId, onStockUpdate }) => {
+    const [searchTerm, setSearchTerm] = useState('');
+    const [filter, setFilter] = useState('all'); // all, low_stock
+
+    const lowStockItems = useMemo(() => {
+        return inventory.filter(item => item.stock <= item.threshold);
+    }, [inventory]);
+
+    const filteredInventory = useMemo(() => {
+        let items = inventory;
+        if (filter === 'low_stock') {
+            items = lowStockItems;
+        }
+
+        if (searchTerm) {
+            const searchLower = searchTerm.toLowerCase();
+            items = items.filter(item =>
+                item.name.toLowerCase().includes(searchLower) ||
+                item.sku.toLowerCase().includes(searchLower)
+            );
+        }
+        return items.sort((a, b) => a.name.localeCompare(b.name));
+    }, [inventory, filter, searchTerm, lowStockItems]);
+
+    const totalStock = inventory.reduce((sum, item) => sum + item.stock, 0);
+    const totalProducts = inventory.length;
+
+    // demoItem will be undefined if inventory is empty, which is fine now as we check for it.
+    const demoItem = lowStockItems.find(item => item.sku === 'SDL002') || inventory[0];
+
+
+    const handleSnooze = useCallback((itemId) => {
+        console.log(`Snoozing alert for ${itemId}`);
+        // In a real app, this would update a DynamoDB field to temporarily hide the alert.
+    }, []);
+
+    const handleFilterChange = (newFilter) => {
+        setFilter(newFilter);
+        window.scrollTo({ top: document.getElementById('inventory-list').offsetTop - 20, behavior: 'smooth' });
+    };
+
+    return (
+        <div className="container mx-auto p-4 sm:p-6 lg:p-8">
+            <header className="mb-8">
+                <h1 className="text-3xl font-extrabold text-gray-900 flex items-center">
+                    <Package className="w-8 h-8 text-indigo-600 mr-3" /> Retail Inventory Dashboard
+                </h1>
+                <p className="text-sm text-gray-500 mt-1">Logged in as Shop Owner ({userId})</p>
+                <Button variant="secondary" onClick={() => Auth.signOut()} className="mt-2 text-xs">Sign Out</Button>
+            </header>
+
+            {/* Stats Overview */}
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
+                <StatCard
+                    title="Total Products"
+                    value={totalProducts}
+                    icon={Package}
+                    colorClass="text-indigo-600"
+                    description="Items currently tracked in the catalog."
+                />
+                <StatCard
+                    title="Total Stock Units"
+                    value={totalStock.toLocaleString()}
+                    icon={Users}
+                    colorClass="text-sky-600"
+                    description="Total inventory units across all products."
+                />
+                <StatCard
+                    title="Low Stock Alerts"
+                    value={lowStockItems.length}
+                    icon={AlertTriangle}
+                    colorClass="text-orange-600"
+                    description="Items below reorder threshold (triggers SNS)."
+                />
+                <StatCard
+                    title="Sales Last 5 Days"
+                    value={`$${salesHistory.reduce((sum, sale) => sum + sale.total, 0).toFixed(2)}`}
+                    icon={TrendingUp}
+                    colorClass="text-emerald-600"
+                    description="Revenue snapshot for quick analysis."
+                />
+            </div>
+
+            {/* Alerts & SNS Demo Section */}
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-10">
+                <div className="lg:col-span-2">
+                    {lowStockItems.length > 0 && (
+                        <LowStockAlert alerts={lowStockItems} onSnooze={handleSnooze} />
+                    )}
+                </div>
+                <div className="lg:col-span-1">
+                    {/* CRITICAL FIX: Only render NotificationDemo if a demoItem (or any item) exists */}
+                    {demoItem && <NotificationDemo item={demoItem} />}
+                </div>
+            </div>
+
+            {/* Inventory List Header and Controls */}
+            <div id="inventory-list" className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-6 pt-4 border-t border-gray-200">
+                <h2 className="text-2xl font-bold text-gray-900 mb-4 sm:mb-0 flex items-center">
+                    <BarChart3 className="w-6 h-6 mr-2 text-indigo-600" /> Inventory List
+                </h2>
+                <div className="flex flex-col sm:flex-row space-y-3 sm:space-y-0 sm:space-x-4 w-full sm:w-auto">
+                    <div className="relative w-full sm:max-w-xs">
+                        <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-gray-400" />
+                        <input
+                            type="text"
+                            placeholder="Search by name or SKU..."
+                            value={searchTerm}
+                            onChange={(e) => setSearchTerm(e.target.value)}
+                            className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500"
+                        />
+                    </div>
+                    <Button
+                        variant={filter === 'low_stock' ? 'danger' : 'secondary'}
+                        onClick={() => handleFilterChange(filter === 'low_stock' ? 'all' : 'low_stock')}
+                        icon={AlertTriangle}
+                    >
+                        {filter === 'low_stock' ? 'Show All' : `Show Low Stock (${lowStockItems.length})`}
+                    </Button>
+                </div>
+            </div>
+
+            {/* Inventory Table (Responsive) */}
+            <div className="bg-white shadow-xl rounded-2xl overflow-hidden border border-gray-100">
+                <div className="overflow-x-auto">
+                    <table className="min-w-full divide-y divide-gray-200">
+                        <thead className="bg-gray-50">
+                            <tr>
+                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Product Name</th>
+                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider hidden sm:table-cell">SKU</th>
+                                <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Stock</th>
+                                <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider hidden md:table-cell">Price</th>
+                                <th className="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody className="bg-white divide-y divide-gray-200">
+                            {filteredInventory.map((item) => (
+                                <InventoryRow key={item.id} item={item} onStockUpdate={onStockUpdate} />
+                            ))}
+                            {filteredInventory.length === 0 && (
+                                <tr>
+                                    <td colSpan="5" className="px-6 py-8 text-center text-gray-500">
+                                        No products match your current filters or search term.
+                                    </td>
+                                </tr>
+                            )}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    );
+};
+
+const InventoryRow = ({ item, onStockUpdate }) => {
+    const [change, setChange] = useState(1);
+    const [loading, setLoading] = useState(false);
+    const isLowStock = item.stock <= item.threshold;
+
+    const handleUpdate = async (type) => {
+        setLoading(true);
+        const stockChange = type === 'add' ? change : -change;
+        await onStockUpdate(item.id, stockChange);
+        setLoading(false);
+        setChange(1);
+    };
+
+    return (
+        <tr className={`hover:bg-gray-50 transition duration-150 ${isLowStock ? 'bg-orange-50' : ''}`}>
+            <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
+                {item.name}
+                <div className="text-xs text-gray-500 block sm:hidden mt-1">SKU: {item.sku}</div>
+            </td>
+            <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 hidden sm:table-cell">{item.sku}</td>
+            <td className="px-6 py-4 whitespace-nowrap text-sm text-right">
+                <div className={`font-bold ${isLowStock ? 'text-red-600' : 'text-green-700'}`}>
+                    {item.stock}
+                    {isLowStock && <span className="ml-2 text-xs text-orange-600 font-medium">(Low)</span>}
+                </div>
+                <div className="text-xs text-gray-500">Th: {item.threshold}</div>
+            </td>
+            <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 text-right hidden md:table-cell">${item.price.toFixed(2)}</td>
+            <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                <div className="flex items-center space-x-2 justify-center">
+                    <input
+                        type="number"
+                        min="1"
+                        value={change}
+                        onChange={(e) => setChange(Math.max(1, parseInt(e.target.value) || 1))}
+                        className="w-16 text-center border border-gray-300 rounded-lg text-sm p-1.5 focus:ring-indigo-500 focus:border-indigo-500"
+                    />
+                    <Button
+                        variant="primary"
+                        onClick={() => handleUpdate('add')}
+                        disabled={loading}
+                        className="py-1.5 px-3"
+                        icon={loading ? Loader2 : Plus}
+                    >
+                    </Button>
+                    <Button
+                        variant="secondary"
+                        onClick={() => handleUpdate('subtract')}
+                        disabled={loading || item.stock < change}
+                        className="py-1.5 px-3"
+                        icon={loading ? Loader2 : Minus}
+                    >
+                    </Button>
+                </div>
+            </td>
+        </tr>
+    );
+};
+
+// --- App Root ---
+
+function App() {
+    const [isAuthenticated, setIsAuthenticated] = useState(false);
+    const [userId, setUserId] = useState(null);
+    const [inventory, setInventory] = useState([]);
+    const [isLoading, setIsLoading] = useState(true);
+
+    const service = useMemo(() => inventoryService(userId), [userId]);
+    
+    // Function passed to AuthScreen
+    const handleLogin = (id) => {
+        setUserId(id);
+        setIsAuthenticated(true);
+    };
+
+    // Step 1: Handle Authentication State Change Listener
+    useEffect(() => {
+        const checkUser = async () => {
+            try {
+                // AWAIT CONFIGURATION: Explicitly wait for the global configuration promise
+                await window.configureAmplifyPromise();
+                
+                // Now Auth object is guaranteed to be available
+                const user = await Auth.currentAuthenticatedUser();
+                const currentUserId = user.attributes.sub;
+                setUserId(currentUserId);
+                setIsAuthenticated(true);
+            } catch (error) {
+                // If configuration failed OR no user signed in, show login screen
+                console.error("Initial Auth Check/Config Error:", error);
+                setIsAuthenticated(false);
+            } finally {
+                setIsLoading(false);
+            }
+        };
+
+        checkUser();
+        
+        // This is a placeholder for SignOut listener logic
+        // The SignOut call below now triggers a page reload which forces a checkUser() run.
+        
+    }, []);
+    
+    // Step 2: Load Data on Auth
+    useEffect(() => {
+        if (isAuthenticated && userId) {
+            const loadInventory = async () => {
+                try {
+                    // Use the real service which now tries to call Amplify API
+                    const data = await service.fetchAll(); 
+                    setInventory(data);
+                } catch (error) {
+                    console.error("Failed to fetch inventory:", error);
+                    // If API call fails (e.g., token expired), force logout
+                    // Auth.signOut(); 
+                }
+            };
+            loadInventory();
+        }
+    }, [isAuthenticated, userId, service]);
+
+    // Handle Stock Update (CRUD Simulation)
+    const handleStockUpdate = async (itemId, change) => {
+        try {
+            await service.updateStock(itemId, change);
+            // Optimistically update the UI after successful (mock/real) API call
+            setInventory(prev => prev.map(item =>
+                item.id === itemId
+                    ? { ...item, stock: Math.max(0, item.stock + change) }
+                    : item
+            ));
+            console.log(`Successfully updated stock for ${itemId} by ${change}`);
+        } catch (error) {
+            console.error("Failed to update stock:", error);
+            // Rollback UI update if a real error occurred
+        }
+    };
+
+    if (isLoading) {
+        return (
+            <div className="min-h-screen flex items-center justify-center bg-gray-50">
+                <Loader2 className="w-8 h-8 animate-spin text-indigo-600" />
+                <span className="ml-3 text-lg font-medium text-gray-700">Checking Authentication...</span>
+            </div>
+        );
+    }
+
+    if (!isAuthenticated) {
+        return <AuthScreen onLogin={handleLogin} />;
+    }
+
+    return (
+        <div className="min-h-screen bg-gray-50 font-sans">
+            <Dashboard
+                inventory={inventory}
+                salesHistory={mockSalesHistory}
+                userId={userId}
+                onStockUpdate={handleStockUpdate}
+            />
+            {/* Simple footer for separation */}
+            <footer className="py-4 text-center text-xs text-gray-400 border-t border-gray-100 mt-8">
+                Authenticated via AWS Cognito.
+            </footer>
+        </div>
+    );
+}
+
+// --- App Mount ---
+const rootElement = document.getElementById('root');
+if (rootElement) {
+    ReactDOM.createRoot(rootElement).render(<App />);
+}
+
+
+    </script>
+</body>
+</html>
